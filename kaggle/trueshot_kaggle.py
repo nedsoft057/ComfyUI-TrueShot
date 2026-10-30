@@ -106,12 +106,18 @@ def up():
         socket.create_connection(("127.0.0.1", 8188), 1).close(); return True
     except OSError:
         return False
+import torch
+if not torch.cuda.is_available():
+    raise SystemExit("NO GPU in this session. Notebook panel -> Session options -> Accelerator: GPU T4 x2, then run again.")
+print("GPU:", torch.cuda.get_device_name(0), flush=True)
 if not up():
     log = open(f"{ROOT}/comfy.log", "w")
-    subprocess.Popen([sys.executable, "main.py", "--listen", "127.0.0.1", "--port", "8188", "--disable-auto-launch",
+    proc = subprocess.Popen([sys.executable, "main.py", "--listen", "127.0.0.1", "--port", "8188", "--disable-auto-launch",
                       "--disable-pinned-memory", "--cache-none"], cwd=COMFY, stdout=log, stderr=subprocess.STDOUT)
     for _ in range(180):
         if up(): break
+        if proc.poll() is not None:
+            print(open(f"{ROOT}/comfy.log").read()[-4000:]); raise SystemExit("ComfyUI crashed on start (log above)")
         time.sleep(2)
     else:
         print(open(f"{ROOT}/comfy.log").read()[-4000:]); raise SystemExit("ComfyUI did not start")
