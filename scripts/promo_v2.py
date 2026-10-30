@@ -27,7 +27,10 @@ def L(p): return Image.open(p).convert("RGB")
 def g(p): return sorted(glob.glob(os.path.join(RUN, p)))
 
 
-shots = [L(p) for p in g("shot_*.png")]
+_pol = RUN.rstrip("/") + "_polished"
+shots = [L(p) for p in sorted(glob.glob(os.path.join(_pol, "shot_*.png")))] if os.path.isdir(_pol) else [L(p) for p in g("shot_*.png")]
+import json as _json
+BOXES = _json.load(open(os.path.join(_pol, "boxes.json"))) if os.path.isdir(_pol) else None
 ai = [L(p) for p in g("ai_only_*.png")]
 cmp = [L(p) for p in g("compare_*.png")]
 market = L(g("marketplace_*.png")[0])
@@ -253,37 +256,55 @@ def s_prompt2(t, msg, att, name, meta, agent="TrueShot · ComfyUI"):
     return c
 
 
+def tightc(im, box, pad=0.10, wpad=0.55):
+    x0, y0, x1, y1 = box; h = y1 - y0; w = x1 - x0
+    return im.crop((max(0, int(x0 - w * wpad)), max(0, int(y0 - h * pad)), min(im.width, int(x1 + w * wpad)),
+                    min(im.height, int(y1 + h * pad))))
+
+
+def ai_box(im):
+    """Locate the AI-drawn bottle: brightest tall blob near the centre."""
+    a = np.asarray(im.convert("L")).astype(np.float32)
+    m = (a > np.percentile(a, 80)).astype(np.uint8)
+    import cv2 as _cv
+    m = _cv.morphologyEx(m, _cv.MORPH_OPEN, np.ones((9, 9), np.uint8))
+    n, l, st, cen = _cv.connectedComponentsWithStats(m, 8)
+    best, bs = None, -1
+    for k in range(1, n):
+        x, y, w, h, ar = st[k]
+        if h < im.height * 0.25: continue
+        sc = ar - abs(cen[k][0] - im.width / 2) * 20
+        if sc > bs: best, bs = (x, y, x + w, y + h), sc
+    return best or (int(im.width * .35), int(im.height * .15), int(im.width * .65), int(im.height * .9))
+
+
 def s_explode(t):
-    """Exploded callout diagram on the real product."""
-    c = Image.new("RGB", (W, H), (236, 233, 226))
+    """Your photo -> AI only -> TrueShot, same bottle size, honest crops."""
     yy, xx = np.mgrid[0:H, 0:W]
-    v = np.clip(245 - np.sqrt(((xx - W / 2) / W) ** 2 + ((yy - H / 2) / H) ** 2) * 80, 200, 245)
-    c = Image.fromarray(np.dstack([v, v - 3, v - 9]).astype(np.uint8)); d = ImageDraw.Draw(c)
-    def ctr(im):
-        w, h = im.size
-        return im.crop((int(w * 0.33), int(h * 0.12), int(w * 0.67), int(h * 0.92)))
-    real = ctr(shots[0]); fake = ctr(ai[0])
-    split = ease((t - 0.3) / 0.9)
-    R = fit(real, 520, 860); Fk = fit(fake, 520, 860)
-    paste(c, Fk, W / 2 - 330 * split, H / 2, 0.85 * split + 0.15, r=20)
-    paste(c, R, W / 2 + 330 * split, H / 2, 1, r=20)
-    T(d, (W / 2 - 330 * split, 70), "AI only", F("Bold", 34), (220, 60, 60), "mm", split, bg=(240, 236, 228))
-    T(d, (W / 2 + 330 * split, 70), "TrueShot", F("Bold", 34), (20, 150, 70), "mm", split, bg=(240, 236, 228))
-    calls = [("01", "LABEL", "57 → 99", 0.38), ("02", "COLOUR", "71 → 93", 0.55), ("03", "GEOMETRY", "locked", 0.72),
-             ("04", "TRUTH SCORE", "43 → 96", 0.88)]
-    for i, (n, nm, val, fy) in enumerate(calls):
-        k = ease((t - 1.0 - i * BEAT) / 0.4)
+    v = np.clip(246 - np.sqrt(((xx - W / 2) / W) ** 2 + ((yy - H / 2) / H) ** 2) * 80, 205, 246)
+    c = Image.fromarray(np.dstack([v, v - 3, v - 8]).astype(np.uint8)); d = ImageDraw.Draw(c)
+    bgc = (240, 236, 229)
+    i = 0
+    ts = tightc(shots[i], BOXES[i]) if BOXES else shots[i]
+    aim = ai[i]
+    x0, y0, x1, y1 = BOXES[i]; cxm = (x0 + x1) / 2; hh = (y1 - y0) * 1.35; ww = (x1 - x0) * 1.35
+    aic = tightc(aim, (int(cxm - ww / 2), int(y1 - hh), int(cxm + ww / 2), int(min(aim.height, y1 + (y1 - y0) * 0.05))))
+    ph = fit(photo, 900, 1200)
+    pb = ai_box(ph); phc = tightc(ph, pb, 0.06, 0.45)
+    panels = [(phc, "Your photo", (70, 70, 76), "real label"), (aic, "AI only", (215, 55, 55), "MAXITONE → garbled"),
+              (ts, "TrueShot", (20, 150, 70), "MAXITONE · exact")]
+    for j, (im, title, col, sub) in enumerate(panels):
+        k = ease((t - j * BEAT * 1.5) / 0.45)
         if k <= 0: continue
-        bx = W / 2 + 330 + 260
-        by = int(H * fy) - 120
-        ax = W / 2 + 330 + 120
-        d.line([ax, by + 20, bx - 10, by + 20], fill=(30, 30, 30), width=2)
-        d.ellipse([ax - 7, by + 13, ax + 7, by + 27], outline=(30, 30, 30), width=2)
-        hl = i == int(min(3, max(0, (t - 1.0) / BEAT)))
-        d.rectangle([bx, by, bx + 52, by + 40], fill=GREEN if hl else (30, 30, 30))
-        d.text((bx + 26, by + 20), n, font=MONO(24), fill=(255, 255, 255), anchor="mm")
-        d.text((bx + 66, by + 20), nm, font=MONO(28), fill=(30, 30, 30), anchor="lm")
-        d.text((bx + 66, by + 58), val, font=MONO(22), fill=(110, 110, 110), anchor="lm")
+        pim = fit(im, 500, 760)
+        x = 400 + j * 560
+        paste(c, pim, x, 560 + (1 - k) * 50, k, r=22)
+        T(d, (x, 120), title, F("Bold", 44), col, "mm", k, bg=bgc)
+        T(d, (x, 980), sub, MONO(26), (60, 60, 64), "mm", k, bg=bgc)
+    kk = ease((t - BEAT * 5) / 0.4)
+    if kk > 0:
+        d.rounded_rectangle([W / 2 + 520 - 190, 170, W / 2 + 520 + 190, 230], 30, fill=(22, 163, 74))
+        T(d, (W / 2 + 520, 200), "truth 43 → 96", F("Bold", 30), (255, 255, 255), "mm", kk, bg=(22, 163, 74))
     return c
 
 

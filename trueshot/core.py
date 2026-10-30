@@ -522,3 +522,59 @@ def marketplace_check(img, min_side=1000, fill_min=0.85, white_tol=8 / 255):
         "not_cropped": bool(not touches),
     }
     return {"pass": all(checks.values()), "fill": round(float(fill), 3), **checks}
+
+
+# ------------------------------------------------------------ realism pass
+def realism_composite(gen, prod, alpha, M, band_px=None, tone=0.35, wrap=0.35, shadow=0.3):
+    """Locked-mode composite that sits the real product into the scene:
+    1. inpaint the band around the product (latent-lock halo / staged card)
+    2. tone-match the product to the light measured in a ring around it
+    3. light-wrap the edges with blurred scene light
+    4. soft contact shadow, feathered matte."""
+    Hg, Wg = gen.shape[:2]
+    p_rgb = cv2.warpPerspective(prod, M, (Wg, Hg), flags=cv2.INTER_CUBIC)
+    p_a = cv2.warpPerspective(alpha, M, (Wg, Hg), flags=cv2.INTER_LINEAR)
+    hard = (p_a > 0.5).astype(np.uint8)
+    hgt = max(1, bbox(p_a)[3] - bbox(p_a)[1])
+    band_px = band_px or max(16, int(hgt * 0.09))
+    grown = cv2.dilate(hard, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (band_px * 2 + 1,) * 2))
+    # the locked latent block extends furthest above the cap: grow the hole upward too
+    up = int(hgt * 0.12)
+    shifted = np.zeros_like(hard); shifted[:-up or None] = hard[up:] if up else hard
+    grown = np.maximum(grown, cv2.dilate(shifted, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (band_px * 2 + 1,) * 2)))
+    band = (grown - hard).astype(np.uint8)
+    # fill product + band purely from the scene outside it (no product light leaks in),
+    # multi-scale so wide halos fill cleanly
+    hole = grown.astype(np.uint8)
+    small = cv2.resize(to_u8(gen), (Wg // 2, Hg // 2), interpolation=cv2.INTER_AREA)
+    hs = cv2.resize(hole, (Wg // 2, Hg // 2), interpolation=cv2.INTER_NEAREST)
+    fill = cv2.resize(cv2.inpaint(small, cv2.dilate(hs, np.ones((3, 3), np.uint8)), 9, cv2.INPAINT_TELEA), (Wg, Hg),
+                      interpolation=cv2.INTER_CUBIC)
+    fill = cv2.GaussianBlur(to_f(fill), (0, 0), 2.0)
+    soft = cv2.GaussianBlur(hole.astype(np.float32), (0, 0), 3.0)[..., None]
+    base = gen * (1 - soft) + fill * soft
+    # light from a ring outside the band
+    ring = (cv2.dilate(grown, np.ones((41, 41), np.uint8)) - grown) > 0
+    lab_s = cv2.cvtColor(base.astype(np.float32), cv2.COLOR_RGB2LAB)
+    lab_p = cv2.cvtColor(np.clip(p_rgb, 0, 1).astype(np.float32), cv2.COLOR_RGB2LAB)
+    m = hard > 0
+    if ring.sum() > 50 and m.sum() > 50:
+        ms, mp = lab_s[ring].mean(0), lab_p[m].mean(0)
+        out = lab_p.copy()
+        out[..., 0] = lab_p[..., 0] + (ms[0] - mp[0]) * tone * 0.6
+        out[..., 1] = lab_p[..., 1] + (ms[1] - mp[1]) * tone
+        out[..., 2] = lab_p[..., 2] + (ms[2] - mp[2]) * tone
+        out[..., 0] = np.clip(out[..., 0], 0, 100)
+        p_rgb = np.clip(cv2.cvtColor(out, cv2.COLOR_LAB2RGB), 0, 1)
+    # light wrap: scene light bleeding over the product edge
+    edge = np.clip(hard.astype(np.float32) - cv2.erode(hard, np.ones((9, 9), np.uint8)).astype(np.float32), 0, 1)
+    edge = cv2.GaussianBlur(edge, (0, 0), 3)
+    scene_blur = cv2.GaussianBlur(base, (0, 0), 12)
+    p_rgb = p_rgb * (1 - wrap * edge[..., None]) + scene_blur * (wrap * edge[..., None])
+    # shadow + feathered matte
+    if shadow > 0:
+        sh = contact_shadow(hard.astype(np.float32), strength=shadow, softness=0.02, lift=0.06)
+        base = base * (1 - sh[..., None])
+    a = cv2.GaussianBlur(hard.astype(np.float32), (0, 0), 1.1)
+    out = base * (1 - a[..., None]) + p_rgb * a[..., None]
+    return np.clip(out, 0, 1).astype(np.float32)
