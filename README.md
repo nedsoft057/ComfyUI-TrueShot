@@ -6,7 +6,11 @@
 
 Entry for Comfy's `#OpenSourceHiggsfield` challenge. Higgsfield-style marketing studios generate the whole frame and hope. TrueShot generates the scene and **keeps the product real**.
 
-![AI only vs TrueShot](media/compare.png)
+![AI only vs TrueShot: real outputs from a free Kaggle T4](media/compare.png)
+
+*Real outputs from one run on a free Kaggle T4. Left of each pair: FLUX.2 Klein on its own ("VITAMIN C" becomes gibberish, the bottle changes shape). Right: TrueShot.*
+
+![The shot pack: lifestyle, story, banner, marketplace](media/pack.jpg)
 
 ---
 
@@ -42,7 +46,12 @@ TrueShot treats the product as ground truth and everything else as generative.
 | report | Per-shot **PASS / REVIEW** verdict and score breakdown |
 
 ```
-shot 0 (lifestyle) v0: PASS | truth AI-only 73 -> TrueShot 96 [label 66->100, shape 100->100, colour 51->84] geometry verified (features, 35 inliers)
+5/5 shots restored | label fidelity (SSIM vs real product) 0.94 -> 0.99
+shot 0 (lifestyle) v0: PASS | truth AI-only 80 -> TrueShot 98 [label 69->99, shape 98->99, colour 82->95] geometry verified (locked)
+shot 1 (lifestyle) v0: PASS | truth AI-only 64 -> TrueShot 97 [label 55->99, shape 77->98, colour 68->90] geometry verified (locked)
+shot 2 (lifestyle) v0: PASS | truth AI-only 74 -> TrueShot 95 [label 68->99, shape 82->88, colour 75->94] geometry verified (locked)
+shot 3 (story)     v0: PASS | truth AI-only 55 -> TrueShot 98 [label 48->99, shape 48->98, colour 85->93] geometry verified (locked)
+shot 4 (banner)    v0: PASS | truth AI-only 51 -> TrueShot 98 [label 53->99, shape 48->99, colour 53->96] geometry verified (locked)
 marketplace main image: PASS | white bg True | >=1000px True | product fill 89% (>=85%: True) | not cropped True | product pixels: 100% real
 ```
 
@@ -64,22 +73,22 @@ Other tools compete on how pretty the image is. TrueShot also measures **how fai
 ## How it works
 
 ```
-phone photo ─▶ Cutout ─▶ Plan shot pack ─▶ FLUX.2 Klein reference edit (per shot × variant)
-                 │            │  staged reference: the real product placed exactly
-                 │            │  where it belongs in each format
-                 ▼            ▼
-           Marketplace    Pixel-True Restore
-           (real pixels,  locate ─▶ ghost removal ─▶ harmonise ─▶ paste real pixels ─▶ seam
-            compliance)   ─▶ Truth Score (AI-only vs TrueShot) ─▶ best variant ─▶ PASS / REVIEW
+phone photo ─▶ Cutout ─▶ Plan shot pack ─┬─▶ LOCKED: staged latent + regen mask ─▶ FLUX.2 Klein masked sampling
+                 │                         │      (product latent held fixed, only the scene is generated)
+                 │                         └─▶ BASELINE: plain Klein reference edit (AI-only, for comparison)
+                 ▼                                              ▼
+           Marketplace                          Pixel-True Restore (exact geometry)
+           (real pixels, compliance)            ghost removal ─▶ paste real pixels ─▶ contact shadow ─▶ seam
+                                                ─▶ Truth Score: AI-only vs TrueShot ─▶ PASS / REVIEW
 ```
 
 1. **Cutout.** An IS-Net matte via `rembg` when available, falling back to GrabCut seeded from a Lab k-means model of the photo border. It keeps the largest component, fills holes (labels, reflections) and feathers the edge.
 2. **Plan + stage.** Each format has a layout (product height, centre, base line). The real product is staged at that exact spot on a neutral card, and that becomes the generator's reference, so the model builds the scene *around* the product instead of reinventing it.
-3. **Generate.** FLUX.2 Klein 4B reference editing (open weights), one run per shot and per variant, using ComfyUI list mapping.
-4. **Locate.** SIFT on the real product (inside its matte) against the render, then a ratio test, then a MAGSAC++ homography. It's rejected unless the quad is convex and the area and aspect are sane, and it's refit as a similarity transform unless the full perspective clearly explains more matches. Fallbacks are multi-scale masked template matching, then the staged layout prior.
-5. **Ghost removal.** Where the model drew *more* product than exists (a wider bottle, a phantom cap), it re-segments the render and inpaints the scene back in.
+3. **Generate, locked.** The staged image is VAE-encoded and given a **regen mask** (everything except the product, slightly grown), and FLUX.2 Klein 4B samples with that noise mask. The product latent is held fixed at every step, so the model paints the scene *around the real product* and its geometry is known exactly. A plain unmasked Klein edit runs alongside as the **AI-only baseline** for the comparison and the AI-only Truth Score.
+4. **Locate (free mode / baseline).** SIFT on the real product (inside its matte) against the render, then a ratio test, then a MAGSAC++ homography. It's rejected unless the quad is convex and the area and aspect are sane, and it's refit as a similarity transform unless the full perspective clearly explains more matches. Fallbacks are multi-scale masked template matching, then the staged layout prior.
+5. **Ghost removal.** Where the model drew *more* product than exists (a wider bottle, a phantom cap, a second bottle sketched behind the locked one), it re-segments the render and inpaints the scene back in.
 6. **Harmonise.** Partial Lab mean and contrast transfer from what the model rendered *as the product*, so the real product takes the scene's light and colour cast while every letter of the label stays intact.
-7. **Paste + seam.** The real pixels are warped in with a feathered matte edge. The generated rim, contact shadow and reflections stay.
+7. **Paste + seam + shadow.** The real pixels go in at the exact staged transform with a feathered matte edge, plus a soft contact shadow derived from the silhouette.
 8. **Score + select.** Truth Score for the AI-only and TrueShot versions. With several variants per shot, it keeps the one where the generator stayed most faithful, which gives the cleanest seams.
 
 All of TrueShot's own logic is numpy and OpenCV. It runs on CPU and is unit-tested without a GPU.
