@@ -99,9 +99,9 @@ class TrueShotPlan:
             "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFF}),
         }}
 
-    RETURN_TYPES = (PLAN, "IMAGE", "STRING", "INT", "INT", "INT", "STRING")
-    RETURN_NAMES = ("plan", "staged", "prompts", "widths", "heights", "seeds", "plan_text")
-    OUTPUT_IS_LIST = (False, True, True, True, True, True, False)
+    RETURN_TYPES = (PLAN, "IMAGE", "STRING", "INT", "INT", "INT", "STRING", "MASK")
+    RETURN_NAMES = ("plan", "staged", "prompts", "widths", "heights", "seeds", "plan_text", "regen_masks")
+    OUTPUT_IS_LIST = (False, True, True, True, True, True, False, True)
     FUNCTION = "run"
     CATEGORY = CAT
 
@@ -109,10 +109,11 @@ class TrueShotPlan:
         p = make_plan(_np(product)[..., :3], _m(matte), product_name, brief, formats, variants, seed)
         sh = p["shots"]
         staged = [_t(s.pop("_staged")) for s in sh]
+        regen = [torch.from_numpy(s.pop("_regen"))[None] for s in sh]
         txt = "\n".join(f"#{s['shot']}.{s['variant']} {s['format']:9s} {s['width']}x{s['height']}  {s['scene']}"
                         for s in sh)
         return (p, staged, [s["prompt"] for s in sh], [s["width"] for s in sh], [s["height"] for s in sh],
-                [s["seed"] for s in sh], txt)
+                [s["seed"] for s in sh], txt, regen)
 
 
 class TrueShotRestore:
@@ -126,7 +127,13 @@ class TrueShotRestore:
         return {"required": {"plan": (PLAN,), "product": ("IMAGE",), "matte": ("MASK",),
                              "generated": ("IMAGE",),
                              "harmonise": ("FLOAT", {"default": 0.55, "min": 0.0, "max": 1.0, "step": 0.05}),
-                             "edge_softness": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 6.0, "step": 0.1})}}
+                             "edge_softness": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 6.0, "step": 0.1}),
+                             "mode": (["locked", "locate"], {"default": "locked",
+                                      "tooltip": "locked: product position was fixed during generation (masked "
+                                                 "sampling). locate: find the product in a free generation."}),
+                             "shadow": ("FLOAT", {"default": 0.35, "min": 0.0, "max": 1.0, "step": 0.05})},
+                "optional": {"baseline": ("IMAGE", {"tooltip": "Unlocked AI-only renders, for the comparison "
+                                                               "cards and AI-only Truth Score."})}}
 
     RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "STRING")
     RETURN_NAMES = ("shots", "comparisons", "generated_best", "report")
@@ -134,20 +141,34 @@ class TrueShotRestore:
     FUNCTION = "run"
     CATEGORY = CAT
 
-    def run(self, plan, product, matte, generated, harmonise, edge_softness):
+    def run(self, plan, product, matte, generated, harmonise, edge_softness, mode, shadow, baseline=None):
         p = _first(plan)
         prod, pa = _np(_first(product))[..., :3], _m(_first(matte))
         h_amt, e_px = float(_first(harmonise)), float(_first(edge_softness))
+        locked, sh_amt = _first(mode) == "locked", float(_first(shadow))
         outs, reps, gens = [], [], []
-        for s, g in zip(p["shots"], generated):
+        base_list = list(baseline) if baseline else [None] * len(generated)
+        for s, g, b in zip(p["shots"], generated, base_list):
             g = _np(g)[..., :3]
-            o, _, r = core.restore(prod, pa, g, prior_M=np.array(s["M"]), harmonise_amount=h_amt, edge_px=e_px)
+            M = np.array(s["M"])
+            o, _, r = core.restore(prod, pa, g, prior_M=M, harmonise_amount=h_amt, edge_px=e_px,
+                                   locked=locked, shadow=sh_amt if locked else 0.0)
+            if b is not None:
+                # AI-only reference: what the plain generator did with the product
+                b = _np(b)[..., :3]
+                _, _, rb = core.restore(prod, pa, b, prior_M=M, harmonise_amount=h_amt, edge_px=e_px)
+                r["truth_ai"] = rb.get("truth", r.get("truth_ai"))
+                if rb.get("ok") and "truth_ai" in rb:
+                    r["truth_ai"] = rb["truth_ai"]
+                    r["box_gen"] = rb["box"]
+                g = b
             r.update(shot=s["shot"], variant=s["variant"], format=s["format"])
             outs.append(o), reps.append(r), gens.append(g)
         keep = pick_best(p, reps)
         shots = [_t(outs[i]) for i in keep]
         comps = [_t(core.compare_card(prod, gens[i], outs[i], reps[i]["box"],
-                                      scores=(reps[i]["truth_ai"], reps[i]["truth"]) if "truth" in reps[i] else None))
+                                      scores=(reps[i]["truth_ai"], reps[i]["truth"]) if "truth" in reps[i] else None,
+                                      box_gen=reps[i].get("box_gen")))
                  if reps[i].get("ok") else _t(gens[i]) for i in keep]
         best_gen = [_t(gens[i]) for i in keep]
         lines = [stats([reps[i] for i in keep])]

@@ -339,13 +339,18 @@ def harmonise(prod_rgb, prod_a, scene, amount=0.55):
 
 
 # ---------------------------------------------------------------- restore
-def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0, score=True):
+def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0, score=True, locked=False,
+            shadow=0.0):
     """Paste the *real* product pixels back onto the generated scene.
 
     Returns restored image, warped alpha, and a report with label-fidelity
     scores before/after (SSIM of the product region vs. the real product)."""
     Hg, Wg = gen.shape[:2]
-    Hm, info = locate(prod, alpha, gen, prior_M)
+    if locked and prior_M is not None:
+        # product position was fixed during generation: geometry is exact
+        Hm, info = np.array(prior_M, np.float64), {"method": "locked", "inliers": 0}
+    else:
+        Hm, info = locate(prod, alpha, gen, prior_M)
     if Hm is None:
         return gen.copy(), np.zeros((Hg, Wg), np.float32), {**info, "ok": False, "verdict": "REVIEW"}
     warp = lambda x, interp: cv2.warpPerspective(x, Hm, (Wg, Hg), flags=interp,  # noqa: E731
@@ -355,13 +360,16 @@ def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0, 
     region = p_a > 0.5
     real_rgb = p_rgb.copy()
     before = ssim(gen, p_rgb, p_a)
-    verified = info.get("method") == "features" or info.get("ecc", 0) >= 0.75
+    verified = info.get("method") in ("features", "locked") or info.get("ecc", 0) >= 0.75
     gen_mask = product_mask_near(gen, bbox(p_a)) if score else None
     truth_ai = truth_score(real_rgb, p_a, gen, gen_mask, verified) if score else None
     base = gen
     ghost = 0.0
-    if score and gen_mask is not None:
+    if score and gen_mask is not None and not locked:
         base, ghost = remove_ghost(gen, gen_mask, p_a)
+    if shadow > 0:
+        sh = contact_shadow((p_a > 0.5).astype(np.float32), strength=shadow, softness=0.025, lift=0.08)
+        base = base * (1 - sh[..., None])
     p_rgb = harmonise(p_rgb, p_a, gen, harmonise_amount)
     # soft edge so the seam disappears into the generated rim
     a = cv2.GaussianBlur((p_a > 0.5).astype(np.float32), (0, 0), edge_px) * (p_a > 0.02)
@@ -381,14 +389,17 @@ def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0, 
 
 
 # ------------------------------------------------------------------ visuals
-def compare_card(real_crop, gen, restored, box, label=("AI only", "TrueShot"), scores=None):
-    """Side-by-side zoom on the product: generated vs restored."""
+def _crop_box(img, box, pad_f=0.08):
     x0, y0, x1, y1 = box
-    pad = int(0.08 * max(x1 - x0, y1 - y0))
-    H, W = gen.shape[:2]
-    x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(W, x1 + pad), min(H, y1 + pad)
-    a = gen[y0:y1, x0:x1]
-    b = restored[y0:y1, x0:x1]
+    pad = int(pad_f * max(x1 - x0, y1 - y0))
+    H, W = img.shape[:2]
+    return img[max(0, y0 - pad):min(H, y1 + pad), max(0, x0 - pad):min(W, x1 + pad)]
+
+
+def compare_card(real_crop, gen, restored, box, label=("AI only", "TrueShot"), scores=None, box_gen=None):
+    """Side-by-side zoom on the product: generated vs restored."""
+    a = _crop_box(gen, box_gen or box)
+    b = _crop_box(restored, box)
     h = 512
     s = h / max(1, a.shape[0])
     a = cv2.resize(a, (max(1, int(a.shape[1] * s)), h))

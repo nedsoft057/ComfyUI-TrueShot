@@ -27,7 +27,7 @@
     1
    ],
    "size": 1200,
-   "fill": 0.78
+   "fill": 0.93
   }
  },
  "4": {
@@ -230,6 +230,57 @@
    ]
   }
  },
+ "26": {
+  "class_type": "SetLatentNoiseMask",
+  "inputs": {
+   "samples": [
+    "16",
+    0
+   ],
+   "mask": [
+    "4",
+    7
+   ]
+  }
+ },
+ "27": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "23",
+    0
+   ],
+   "guider": [
+    "19",
+    0
+   ],
+   "sampler": [
+    "20",
+    0
+   ],
+   "sigmas": [
+    "21",
+    0
+   ],
+   "latent_image": [
+    "26",
+    0
+   ]
+  }
+ },
+ "28": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "27",
+    0
+   ],
+   "vae": [
+    "12",
+    0
+   ]
+  }
+ },
  "30": {
   "class_type": "TrueShotRestore",
   "inputs": {
@@ -246,11 +297,27 @@
     1
    ],
    "generated": [
-    "25",
+    "28",
     0
    ],
    "harmonise": 0.55,
-   "edge_softness": 1.5
+   "edge_softness": 1.5,
+   "mode": "locked",
+   "shadow": 0.35,
+   "baseline": [
+    "25",
+    0
+   ]
+  }
+ },
+ "41": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "28",
+    0
+   ],
+   "filename_prefix": "TrueShot/131037-b0a9/locked_raw"
   }
  },
  "31": {
@@ -260,7 +327,7 @@
     "30",
     0
    ],
-   "filename_prefix": "TrueShot/123232-9931/shot"
+   "filename_prefix": "TrueShot/131037-b0a9/shot"
   }
  },
  "32": {
@@ -270,7 +337,7 @@
     "30",
     1
    ],
-   "filename_prefix": "TrueShot/123232-9931/compare"
+   "filename_prefix": "TrueShot/131037-b0a9/compare"
   }
  },
  "33": {
@@ -280,7 +347,7 @@
     "30",
     2
    ],
-   "filename_prefix": "TrueShot/123232-9931/ai_only"
+   "filename_prefix": "TrueShot/131037-b0a9/ai_only"
   }
  },
  "34": {
@@ -290,7 +357,7 @@
     "3",
     0
    ],
-   "filename_prefix": "TrueShot/123232-9931/marketplace"
+   "filename_prefix": "TrueShot/131037-b0a9/marketplace"
   }
  },
  "35": {
@@ -300,7 +367,7 @@
     "2",
     2
    ],
-   "filename_prefix": "TrueShot/123232-9931/cutout"
+   "filename_prefix": "TrueShot/131037-b0a9/cutout"
   }
  },
  "36": {
@@ -320,7 +387,7 @@
     "36",
     0
    ],
-   "filename_prefix": "TrueShot/123232-9931/sheet"
+   "filename_prefix": "TrueShot/131037-b0a9/sheet"
   }
  },
  "38": {
@@ -338,6 +405,15 @@
    "source": [
     "4",
     6
+   ]
+  }
+ },
+ "40": {
+  "class_type": "PreviewAny",
+  "inputs": {
+   "source": [
+    "3",
+    1
    ]
   }
  }

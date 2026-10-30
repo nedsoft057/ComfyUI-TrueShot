@@ -83,10 +83,17 @@ def build(a, run):
         "24": {"class_type": "SamplerCustomAdvanced", "inputs": {
             "noise": ["23", 0], "guider": ["19", 0], "sampler": ["20", 0], "sigmas": ["21", 0], "latent_image": ["22", 0]}},
         "25": {"class_type": "VAEDecode", "inputs": {"samples": ["24", 0], "vae": ["12", 0]}},
+        # locked branch: start from the staged product latent, regenerate only the background
+        "26": {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["16", 0], "mask": ["4", 7]}},
+        "27": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["23", 0], "guider": ["19", 0], "sampler": ["20", 0], "sigmas": ["21", 0], "latent_image": ["26", 0]}},
+        "28": {"class_type": "VAEDecode", "inputs": {"samples": ["27", 0], "vae": ["12", 0]}},
         # pixel-true restore + outputs
         "30": {"class_type": "TrueShotRestore", "inputs": {"plan": ["4", 0], "product": ["2", 0], "matte": ["2", 1],
-                                                            "generated": ["25", 0], "harmonise": a.harmonise,
-                                                            "edge_softness": 1.5}},
+                                                            "generated": ["28", 0], "harmonise": a.harmonise,
+                                                            "edge_softness": 1.5, "mode": "locked",
+                                                            "shadow": a.shadow, "baseline": ["25", 0]}},
+        "41": {"class_type": "SaveImage", "inputs": {"images": ["28", 0], "filename_prefix": f"{P}/locked_raw"}},
         "31": {"class_type": "SaveImage", "inputs": {"images": ["30", 0], "filename_prefix": f"{P}/shot"}},
         "32": {"class_type": "SaveImage", "inputs": {"images": ["30", 1], "filename_prefix": f"{P}/compare"}},
         "33": {"class_type": "SaveImage", "inputs": {"images": ["30", 2], "filename_prefix": f"{P}/ai_only"}},
@@ -114,6 +121,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cutout", default="auto", choices=["auto", "rembg", "grabcut"])
     ap.add_argument("--harmonise", type=float, default=0.55)
+    ap.add_argument("--shadow", type=float, default=0.35)
     ap.add_argument("--klein", default="flux-2-klein.safetensors")
     ap.add_argument("--klein-te", default="qwen_3_4b.safetensors")
     ap.add_argument("--flux-vae", default="flux2-vae.safetensors")
