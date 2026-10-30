@@ -4,8 +4,11 @@ import numpy as np, cv2
 from PIL import Image, ImageDraw, ImageFont
 F = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 def font(s):
-    try: return ImageFont.truetype(F, s)
-    except Exception: return ImageFont.load_default()
+    for f in (F, "DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"):
+        try: return ImageFont.truetype(f, s)
+        except Exception: pass
+    try: return ImageFont.load_default(size=s)   # Pillow >= 10.1 ships a scalable default font
+    except TypeError: return ImageFont.load_default()
 
 def product_rgba(w=300, h=620, text=("LUMA", "VITAMIN C", "SERUM 30ml"), seed=0):
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0)); d = ImageDraw.Draw(im)

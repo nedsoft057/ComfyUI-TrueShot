@@ -365,8 +365,10 @@ def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0, 
     truth_ai = truth_score(real_rgb, p_a, gen, gen_mask, verified) if score else None
     base = gen
     ghost = 0.0
-    if score and gen_mask is not None and not locked:
-        base, ghost = remove_ghost(gen, gen_mask, p_a)
+    if score and gen_mask is not None:
+        # also in locked mode: the generator sometimes sketches a second,
+        # larger product behind the locked one
+        base, ghost = remove_ghost(gen, gen_mask, p_a, grow=4 if locked else 3)
     if shadow > 0:
         sh = contact_shadow((p_a > 0.5).astype(np.float32), strength=shadow, softness=0.025, lift=0.08)
         base = base * (1 - sh[..., None])
@@ -472,7 +474,7 @@ def remove_ghost(gen, gen_mask, real_mask, grow=3):
     ghost = cv2.morphologyEx(ghost, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     if ghost.sum() < 10:
         return gen, 0.0
-    out = cv2.inpaint(to_u8(gen), cv2.dilate(ghost, np.ones((5, 5), np.uint8)), 7, cv2.INPAINT_TELEA)
+    out = cv2.inpaint(to_u8(gen), cv2.dilate(ghost, np.ones((9, 9), np.uint8)), 9, cv2.INPAINT_TELEA)
     return to_f(out), float(ghost.sum() / max(1, (real_mask > 0.5).sum()))
 
 
