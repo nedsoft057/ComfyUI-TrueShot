@@ -296,11 +296,22 @@ def s_explode(t):
     for j, (im, title, col, sub) in enumerate(panels):
         k = ease((t - j * BEAT * 1.5) / 0.45)
         if k <= 0: continue
-        pim = fit(im, 500, 760)
+        pim = fit(im, 420, 600)
         x = 400 + j * 560
-        paste(c, pim, x, 560 + (1 - k) * 50, k, r=22)
-        T(d, (x, 120), title, F("Bold", 44), col, "mm", k, bg=bgc)
-        T(d, (x, 980), sub, MONO(26), (60, 60, 64), "mm", k, bg=bgc)
+        paste(c, pim, x, 470 + (1 - k) * 50, k, r=22)
+        T(d, (x, 110), title, F("Bold", 44), col, "mm", k, bg=bgc)
+        # magnifier on the label band (MAXITONE area), same relative region in each crop
+        kz = ease((t - j * BEAT * 1.5 - 0.5) / 0.4)
+        if kz > 0:
+            w0, h0 = im.size
+            band = im.crop((int(w0 * 0.30), int(h0 * 0.50), int(w0 * 0.70), int(h0 * 0.68)))
+            z = band.resize((440, int(440 * band.height / max(1, band.width))), Image.LANCZOS)
+            z = z.rotate(90, expand=True) if z.height < z.width * 0.6 and False else z
+            zz = fit(z, 460, 200)
+            paste(c, zz, x, 880, kz, r=16)
+            d.rounded_rectangle([x - zz.width / 2 - 4, 880 - zz.height / 2 - 4, x + zz.width / 2 + 4,
+                                 880 + zz.height / 2 + 4], 18, outline=col, width=4)
+        T(d, (x, 1010), sub, MONO(26), (60, 60, 64), "mm", k, bg=bgc)
     kk = ease((t - BEAT * 5) / 0.4)
     if kk > 0:
         d.rounded_rectangle([W / 2 + 520 - 190, 170, W / 2 + 520 + 190, 230], 30, fill=(22, 163, 74))
