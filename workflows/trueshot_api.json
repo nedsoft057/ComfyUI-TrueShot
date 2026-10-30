@@ -1,0 +1,344 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "demo.png"
+  }
+ },
+ "2": {
+  "class_type": "TrueShotCutout",
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ],
+   "method": "auto"
+  }
+ },
+ "3": {
+  "class_type": "TrueShotMarketplace",
+  "inputs": {
+   "product": [
+    "2",
+    0
+   ],
+   "matte": [
+    "2",
+    1
+   ],
+   "size": 1200,
+   "fill": 0.78
+  }
+ },
+ "4": {
+  "class_type": "TrueShotPlan",
+  "inputs": {
+   "product": [
+    "2",
+    0
+   ],
+   "matte": [
+    "2",
+    1
+   ],
+   "product_name": "the product in the reference image",
+   "brief": "on a marble bathroom counter with eucalyptus\non wet black stones with water splashes\non a sunlit beach towel next to sunglasses",
+   "formats": "lifestyle,lifestyle,lifestyle,story,banner",
+   "variants": 1,
+   "seed": 0
+  }
+ },
+ "10": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "flux-2-klein.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "11": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_3_4b.safetensors",
+   "type": "flux2",
+   "device": "default"
+  }
+ },
+ "12": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae.safetensors"
+  }
+ },
+ "13": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "11",
+    0
+   ],
+   "text": [
+    "4",
+    2
+   ]
+  }
+ },
+ "14": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "11",
+    0
+   ],
+   "text": ""
+  }
+ },
+ "16": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "4",
+    1
+   ],
+   "vae": [
+    "12",
+    0
+   ]
+  }
+ },
+ "17": {
+  "class_type": "ReferenceLatent",
+  "inputs": {
+   "conditioning": [
+    "13",
+    0
+   ],
+   "latent": [
+    "16",
+    0
+   ]
+  }
+ },
+ "18": {
+  "class_type": "ReferenceLatent",
+  "inputs": {
+   "conditioning": [
+    "14",
+    0
+   ],
+   "latent": [
+    "16",
+    0
+   ]
+  }
+ },
+ "19": {
+  "class_type": "CFGGuider",
+  "inputs": {
+   "model": [
+    "10",
+    0
+   ],
+   "positive": [
+    "17",
+    0
+   ],
+   "negative": [
+    "18",
+    0
+   ],
+   "cfg": 1.0
+  }
+ },
+ "20": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  }
+ },
+ "21": {
+  "class_type": "Flux2Scheduler",
+  "inputs": {
+   "steps": 4,
+   "width": [
+    "4",
+    3
+   ],
+   "height": [
+    "4",
+    4
+   ]
+  }
+ },
+ "22": {
+  "class_type": "EmptyFlux2LatentImage",
+  "inputs": {
+   "width": [
+    "4",
+    3
+   ],
+   "height": [
+    "4",
+    4
+   ],
+   "batch_size": 1
+  }
+ },
+ "23": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": [
+    "4",
+    5
+   ]
+  }
+ },
+ "24": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "23",
+    0
+   ],
+   "guider": [
+    "19",
+    0
+   ],
+   "sampler": [
+    "20",
+    0
+   ],
+   "sigmas": [
+    "21",
+    0
+   ],
+   "latent_image": [
+    "22",
+    0
+   ]
+  }
+ },
+ "25": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "24",
+    0
+   ],
+   "vae": [
+    "12",
+    0
+   ]
+  }
+ },
+ "30": {
+  "class_type": "TrueShotRestore",
+  "inputs": {
+   "plan": [
+    "4",
+    0
+   ],
+   "product": [
+    "2",
+    0
+   ],
+   "matte": [
+    "2",
+    1
+   ],
+   "generated": [
+    "25",
+    0
+   ],
+   "harmonise": 0.55,
+   "edge_softness": 1.5
+  }
+ },
+ "31": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "30",
+    0
+   ],
+   "filename_prefix": "TrueShot/123232-9931/shot"
+  }
+ },
+ "32": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "30",
+    1
+   ],
+   "filename_prefix": "TrueShot/123232-9931/compare"
+  }
+ },
+ "33": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "30",
+    2
+   ],
+   "filename_prefix": "TrueShot/123232-9931/ai_only"
+  }
+ },
+ "34": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "3",
+    0
+   ],
+   "filename_prefix": "TrueShot/123232-9931/marketplace"
+  }
+ },
+ "35": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "2",
+    2
+   ],
+   "filename_prefix": "TrueShot/123232-9931/cutout"
+  }
+ },
+ "36": {
+  "class_type": "TrueShotContactSheet",
+  "inputs": {
+   "images": [
+    "30",
+    0
+   ],
+   "columns": 3
+  }
+ },
+ "37": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "36",
+    0
+   ],
+   "filename_prefix": "TrueShot/123232-9931/sheet"
+  }
+ },
+ "38": {
+  "class_type": "PreviewAny",
+  "inputs": {
+   "source": [
+    "30",
+    3
+   ]
+  }
+ },
+ "39": {
+  "class_type": "PreviewAny",
+  "inputs": {
+   "source": [
+    "4",
+    6
+   ]
+  }
+ }
+}
