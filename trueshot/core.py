@@ -185,7 +185,7 @@ def _gray(img):
     return cv2.cvtColor(to_u8(img), cv2.COLOR_RGB2GRAY)
 
 
-def locate(prod, alpha, gen, prior_M=None, min_inliers=12):
+def locate(prod, alpha, gen, prior_M=None, min_inliers=10):
     """Find where the product landed in the generated image.
 
     1) SIFT on the product (inside its matte) vs the generated frame,
@@ -204,7 +204,7 @@ def locate(prod, alpha, gen, prior_M=None, min_inliers=12):
         bf = cv2.BFMatcher(cv2.NORM_L2)
         good = []
         for pair in bf.knnMatch(d1, d2, k=2):
-            if len(pair) == 2 and pair[0].distance < 0.78 * pair[1].distance:
+            if len(pair) == 2 and pair[0].distance < 0.82 * pair[1].distance:
                 good.append(pair[0])
         if len(good) >= min_inliers:
             src = np.float32([k1[m.queryIdx].pt for m in good])
@@ -239,14 +239,52 @@ def locate(prod, alpha, gen, prior_M=None, min_inliers=12):
         _, v, _, loc = cv2.minMaxLoc(r)
         if best is None or v > best[0]:
             best = (v, s, loc)
+    init, how = None, None
     if best and best[0] > 0.6:
         v, s, (x, y) = best
-        info.update(method="template", score=round(float(v), 3))
-        return np.array([[s, 0, x], [0, s, y], [0, 0, 1]], np.float64), info
-    if prior_M is not None:
-        info.update(method="prior")
-        return prior_M.copy(), info
-    return None, info
+        init, how = np.array([[s, 0, x], [0, s, y], [0, 0, 1]], np.float64), "template"
+        info.update(score=round(float(v), 3))
+    elif prior_M is not None:
+        init, how = prior_M.copy(), "prior"
+    if init is None:
+        return None, info
+    ref, cc = ecc_refine(prod, alpha, gen, init)
+    if ref is not None:
+        info.update(method=f"{how}+ecc", ecc=round(cc, 3))
+        return ref, info
+    info.update(method=how)
+    return init, info
+
+
+def _edges(img):
+    g = cv2.GaussianBlur(_gray(img).astype(np.float32) / 255.0, (0, 0), 1.0)
+    gx, gy = cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1)
+    return cv2.GaussianBlur(np.sqrt(gx * gx + gy * gy), (0, 0), 1.5)
+
+
+def ecc_refine(prod, alpha, gen, init, iters=120):
+    """Refine a product->gen similarity with ECC on gradient magnitude inside
+    the product silhouette. Gradients (outline, cap, label edges) survive a
+    generator garbling the text, so this aligns where SIFT finds nothing."""
+    Hg, Wg = gen.shape[:2]
+    tmpl = cv2.warpPerspective(_edges(prod), init, (Wg, Hg))
+    msk = (cv2.warpPerspective(alpha, init, (Wg, Hg)) > 0.5).astype(np.uint8)
+    msk = cv2.dilate(msk, np.ones((9, 9), np.uint8))
+    if msk.sum() < 200:
+        return None, 0.0
+    tgt = _edges(gen)
+    W = np.eye(2, 3, dtype=np.float32)
+    try:
+        cc, W = cv2.findTransformECC(tmpl, tgt, W, cv2.MOTION_AFFINE,
+                                     (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, iters, 1e-5), msk, 5)
+    except cv2.error:
+        return None, 0.0
+    # W maps gen coords -> template coords; compose to product -> gen
+    A = np.vstack([W, [0, 0, 1]]).astype(np.float64)
+    Hm = np.linalg.inv(A) @ init
+    if not _sane(Hm, alpha.shape, gen.shape) or cc < 0.5:
+        return None, float(cc)
+    return Hm, float(cc)
 
 
 def _reproj(Hm, src, dst):
@@ -317,7 +355,7 @@ def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0, 
     region = p_a > 0.5
     real_rgb = p_rgb.copy()
     before = ssim(gen, p_rgb, p_a)
-    verified = info.get("method") == "features"
+    verified = info.get("method") == "features" or info.get("ecc", 0) >= 0.75
     gen_mask = product_mask_near(gen, bbox(p_a)) if score else None
     truth_ai = truth_score(real_rgb, p_a, gen, gen_mask, verified) if score else None
     base = gen
