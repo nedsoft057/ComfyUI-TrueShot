@@ -1,61 +1,109 @@
-# TrueShot — AI product photos where your label never melts
+# TrueShot
 
-**An open-source, open-weights product photo studio for ComfyUI.** Entry for Comfy's `#OpenSourceHiggsfield` challenge.
+### Your product. Better presented. Never misrepresented.
 
-One phone photo of your product goes in. A full commerce shot pack comes out: a white-background marketplace photo, lifestyle scenes from a one-line brief, a 9:16 story and a 16:9 banner. In every shot the product is **the real product, pixel for pixel**.
+**An open-source, open-weights product photo studio for ComfyUI.** One phone photo of a real product goes in. A shop-ready shot pack comes out, and every image carries a **Product Truth Score** that proves the product in it is still *your* product.
+
+Entry for Comfy's `#OpenSourceHiggsfield` challenge. Higgsfield-style marketing studios generate the whole frame and hope. TrueShot generates the scene and **keeps the product real**.
 
 ![AI only vs TrueShot](media/compare.png)
 
-## The problem
+---
 
-Image models are great at scenes and bad at *your* product. Labels turn into gibberish, logos warp, a 30 ml bottle becomes a 50 ml one. For a small seller that makes the image useless, because the photo has to show the product that ships. Higgsfield-style marketing studios generate the whole frame and hope.
+## Who it's for
 
-## How TrueShot works
+Most small sellers don't want "AI images". They need to **list a product today, launch a promo, update a catalogue, look trustworthy**, and they can't book a photoshoot every time new stock lands.
+
+| Who | The pain | What TrueShot gives them |
+|---|---|---|
+| **Instagram & WhatsApp vendors** | 15 new items arrive, photographed in a bedroom: bad light, messy background, nothing matches | A consistent catalogue look, lifestyle scenes, story and post formats, with the real item in every one |
+| **Small brands launching a product** | A real serum, a real bottle and no budget for a campaign shoot | Hero shots, banners and announcement creatives in one pass, in a consistent direction |
+| **Catalogue managers & dropshippers** | 100+ SKUs from 20 suppliers, every photo different | The same framing, background and export sizes every time, plus a marketplace compliance check before upload |
+| **Second-hand sellers** | Cluttered photos, and buyers who need to see the real condition | Clean listings that **keep every scratch and dent**, because the product pixels are never regenerated |
+| **Small agencies** | Five clients, the same production grind every week | A repeatable ComfyUI graph and a headless runner they can batch |
+
+## Why AI-only product photos fail
+
+Image models are great at scenes and unreliable with *your* product. Labels turn into gibberish, logos warp, a 30 ml bottle becomes a 50 ml one, colours drift and caps change shape. For a seller that image is worse than useless: it's a **misrepresentation of what ships**.
+
+TrueShot treats the product as ground truth and everything else as generative.
+
+---
+
+## What one run produces
+
+| Output | What it is |
+|---|---|
+| `marketplace_*` | A white-background main image built from **100% real product pixels** (no generation), with an **Amazon-style compliance check**: pure white background, ≥1000 px, product fills ≥85% of the frame, not cropped |
+| `shot_*` | Lifestyle 1:1, story 9:16 and banner 16:9 (text space left), plus optional close-ups. Scene generated, product restored |
+| `compare_*` | A zoomed **AI-only vs TrueShot** card for each shot, with both Truth Scores |
+| `ai_only_*` | What the model produced on its own, kept for honesty |
+| `sheet_*` | A contact sheet of the pack |
+| report | Per-shot **PASS / REVIEW** verdict and score breakdown |
 
 ```
-phone photo ─▶ Cutout ─▶ Plan shot pack ─▶ FLUX.2 Klein reference edit (per shot, per variant)
-                 │             │                          │
-                 │             └─ staged reference: real product placed where it should sit in each format
-                 ▼                                        ▼
-            Marketplace (white bg,                Pixel-True Restore ─▶ shots + before/after cards + fidelity report
-            100% real pixels)                     locate → align → harmonise → seam → QC → keep best variant
+shot 0 (lifestyle) v0: PASS | truth AI-only 73 -> TrueShot 96 [label 66->100, shape 100->100, colour 51->84] geometry verified (features, 35 inliers)
+marketplace main image: PASS | white bg True | >=1000px True | product fill 89% (>=85%: True) | not cropped True | product pixels: 100% real
 ```
 
-1. **Cutout.** IS-Net (rembg) matte when available, with a GrabCut fallback seeded from a Lab colour model of the photo border. Largest component, holes filled, feathered edge.
-2. **Plan.** Every format (lifestyle 1:1, story 9:16, banner 16:9, close-up) has a layout: product height, horizontal position and base line. The real product is **staged** on a neutral card at exactly that spot, and that staged image is the generator's reference. The generator is told to keep the product exactly where it is, so the scene gets built around it.
-3. **Generate.** FLUX.2 Klein 4B reference editing (open weights), one run per shot and per variant, through ComfyUI list mapping.
-4. **Pixel-true restore**, the part generators can't do on their own:
-   - **Locate.** SIFT features on the real product (inside its matte) are matched against the render, with a ratio test and a MAGSAC++ homography, rejected unless it's convex, sane in area and sane in aspect. Then it's refit as a similarity transform unless the full perspective clearly explains the matches better. If there aren't enough features, it falls back to multi-scale masked template matching, then to the staged layout prior.
-   - **Align and paste.** The *original* pixels are warped onto the render.
-   - **Harmonise.** Partial Lab mean/contrast transfer from what the model rendered as the product, so the real product takes on the scene's light and colour cast while keeping every letter of its label.
-   - **Seam.** A feathered matte edge, so the generated rim, shadow and reflections stay and blend.
-   - **QC.** Label fidelity is measured as masked SSIM against the real product, before and after restore. With several variants, it keeps the one where the generator stayed most faithful, so the seams are cleanest.
-5. **Marketplace shot.** Deterministic and with no generation at all: real product, white background, soft contact shadow.
+## Product Truth Score
 
-Every run writes `shot_*`, `compare_*` (AI only vs TrueShot zoom), `ai_only_*`, `marketplace_*`, `sheet_*` and a text report such as:
+Other tools compete on how pretty the image is. TrueShot also measures **how faithfully it shows the real product**, and won't pass a shot it can't verify.
+
+| Component | How it's measured |
+|---|---|
+| **Label** | Masked SSIM between the shot's product region and the real product, aligned. This is where text, logos and fine print live |
+| **Shape** | IoU between the silhouette the image actually shows (re-segmented from the output) and the real silhouette |
+| **Colour** | Lab a*b* chroma distance, so it ignores lighting and catches a red cap that turned orange |
+| **Geometry** | `verified` only when feature matching found the product with enough consistent inliers |
+
+`total = 0.5·label + 0.3·shape + 0.2·colour`. A shot is **PASS** only when the geometry is verified and the total is at least 85. Otherwise it's **REVIEW**: TrueShot says when it can't guarantee preservation (heavy occlusion, a new viewing angle) instead of quietly shipping a wrong product.
+
+---
+
+## How it works
 
 ```
-5/5 shots restored | label fidelity (SSIM vs real product) 0.68 -> 0.99
+phone photo ─▶ Cutout ─▶ Plan shot pack ─▶ FLUX.2 Klein reference edit (per shot × variant)
+                 │            │  staged reference: the real product placed exactly
+                 │            │  where it belongs in each format
+                 ▼            ▼
+           Marketplace    Pixel-True Restore
+           (real pixels,  locate ─▶ ghost removal ─▶ harmonise ─▶ paste real pixels ─▶ seam
+            compliance)   ─▶ Truth Score (AI-only vs TrueShot) ─▶ best variant ─▶ PASS / REVIEW
 ```
+
+1. **Cutout.** An IS-Net matte via `rembg` when available, falling back to GrabCut seeded from a Lab k-means model of the photo border. It keeps the largest component, fills holes (labels, reflections) and feathers the edge.
+2. **Plan + stage.** Each format has a layout (product height, centre, base line). The real product is staged at that exact spot on a neutral card, and that becomes the generator's reference, so the model builds the scene *around* the product instead of reinventing it.
+3. **Generate.** FLUX.2 Klein 4B reference editing (open weights), one run per shot and per variant, using ComfyUI list mapping.
+4. **Locate.** SIFT on the real product (inside its matte) against the render, then a ratio test, then a MAGSAC++ homography. It's rejected unless the quad is convex and the area and aspect are sane, and it's refit as a similarity transform unless the full perspective clearly explains more matches. Fallbacks are multi-scale masked template matching, then the staged layout prior.
+5. **Ghost removal.** Where the model drew *more* product than exists (a wider bottle, a phantom cap), it re-segments the render and inpaints the scene back in.
+6. **Harmonise.** Partial Lab mean and contrast transfer from what the model rendered *as the product*, so the real product takes the scene's light and colour cast while every letter of the label stays intact.
+7. **Paste + seam.** The real pixels are warped in with a feathered matte edge. The generated rim, contact shadow and reflections stay.
+8. **Score + select.** Truth Score for the AI-only and TrueShot versions. With several variants per shot, it keeps the one where the generator stayed most faithful, which gives the cleanest seams.
+
+All of TrueShot's own logic is numpy and OpenCV. It runs on CPU and is unit-tested without a GPU.
 
 ## Nodes
 
 | Node | In → Out |
 |---|---|
 | `TrueShot · Cutout Product` | IMAGE → product crop, MASK, preview |
-| `TrueShot · Marketplace (white bg)` | product + matte → listing photo |
+| `TrueShot · Marketplace (white bg)` | product + matte → listing image, compliance report |
 | `TrueShot · Plan Shot Pack` | product, matte, name, brief, formats, variants → plan + **lists** of staged refs, prompts, widths, heights, seeds |
-| `TrueShot · Pixel-True Restore` | plan + product + matte + generated list → restored shots, comparison cards, best AI-only shots, report |
+| `TrueShot · Pixel-True Restore` | plan + product + matte + generated list → restored shots, comparison cards, AI-only shots, report |
 | `TrueShot · Contact Sheet` | image list → one sheet |
 
-Plan Shot Pack's list outputs work with any reference-capable image model, not just Klein.
+Plan Shot Pack's lists plug into any reference-capable image model. Klein is the open-weights default.
 
-## Run it free on Kaggle
+---
 
-New notebook → Settings: **GPU T4 x2**, **Internet on**. Paste this into one cell and run it:
+## Run it free on Kaggle (one cell, phone-friendly)
+
+New notebook → **Session options**: Accelerator **GPU T4 x2**, Internet **On**. Paste this into one cell:
 
 ```python
-IMAGE_URL = ""   # direct link to your product photo; empty = demo product
+IMAGE_URL = ""   # direct link to your product photo; empty = built-in demo product
 PRODUCT   = "a bottle of LUMA vitamin C serum"
 BRIEF     = "on a marble bathroom counter with eucalyptus | on wet black stones with water splashes | on a sunlit beach towel next to sunglasses"
 FORMATS   = "lifestyle,lifestyle,lifestyle,story,banner"
@@ -65,24 +113,33 @@ src = urllib.request.urlopen(f"https://raw.githubusercontent.com/nedsoft057/Comf
 exec(src.split("# -------------------------------------------------------------------------", 1)[1])
 ```
 
-It installs ComfyUI and this pack, downloads FLUX.2 Klein 4B, the Qwen3-4B text encoder and the FLUX.2 VAE (all open weights), starts ComfyUI headless, renders the pack and copies everything to `/kaggle/working/TrueShot/`.
+It installs ComfyUI and this pack, downloads FLUX.2 Klein 4B (fp8), the Qwen3-4B text encoder and the FLUX.2 VAE (all open weights), starts ComfyUI headless and writes the pack to `/kaggle/working/TrueShot/`.
 
-## Run it on your ComfyUI
+## Run it on your own ComfyUI
 
 ```bash
 cd ComfyUI/custom_nodes && git clone https://github.com/nedsoft057/ComfyUI-TrueShot
 pip install -r ComfyUI-TrueShot/requirements.txt rembg onnxruntime   # rembg optional
 python ComfyUI-TrueShot/scripts/run_trueshot.py --comfy-dir .. --image my_product.jpg \
-  --product "a can of Zobo hibiscus drink" --brief "on a market stall in Lagos|in an ice bucket at a party"
+  --product "a can of hibiscus zobo drink" \
+  --brief "on a busy Lagos market stall|in an ice bucket at a rooftop party|on a picnic mat in the park"
 ```
 
 The API-format graph is in [`workflows/trueshot_api.json`](workflows/trueshot_api.json).
 
-## Tests (CPU, no GPU needed)
+## Tests (CPU only)
 
 ```bash
-python tests/test_core.py   # matte IoU, then restore on simulated AI renders that garble the label (rotation, scale, colour cast)
+python tests/test_core.py
 ```
+
+It builds a synthetic labelled product and a "phone photo", checks matte IoU, then simulates AI renders that garble the label (scale, rotation, colour cast) and asserts that the restored label fidelity rises above the AI-only one.
+
+## Honest limits
+
+- Pixel restoration needs the product to be **visible from roughly the same angle** as the source photo. New viewpoints, heavy occlusion or a hand wrapped around the product get **REVIEW**, not a fake PASS.
+- Harmonisation shifts global tone only. It doesn't relight specular highlights.
+- Not covered yet: virtual try-on for garments, and video.
 
 ## License
 
