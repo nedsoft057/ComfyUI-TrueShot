@@ -8,9 +8,17 @@ Entry for Comfy's `#OpenSourceHiggsfield` challenge. Higgsfield-style marketing 
 
 ![AI only vs TrueShot: real outputs from a free Kaggle T4](media/compare.png)
 
-*Real outputs from one run on a free Kaggle T4. Left of each pair: FLUX.2 Klein on its own ("VITAMIN C" becomes gibberish, the bottle changes shape). Right: TrueShot.*
+*Real outputs from one run on a free Kaggle T4, made from a single phone photo ([examples/otentika_phone_photo.jpg](examples/otentika_phone_photo.jpg)). Left of each pair: FLUX.2 Klein on its own (the O'TENTIKA / MAXITONE label turns to gibberish). Right: TrueShot.*
 
-![The shot pack: lifestyle, story, banner, marketplace](media/pack.jpg)
+**Demo video:** [media/TrueShot_demo.mp4](media/TrueShot_demo.mp4)
+
+**TrueShot shot pack:**
+
+![The shot pack](media/pack.jpg)
+
+**Same prompts, AI-only (no lock):**
+
+![AI-only renders](media/ai_only.jpg)
 
 ---
 
