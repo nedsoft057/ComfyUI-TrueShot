@@ -61,7 +61,7 @@ def build(a, run):
         "1": {"class_type": "LoadImage", "inputs": {"image": os.path.basename(a.image)}},
         "2": {"class_type": "TrueShotCutout", "inputs": {"image": ["1", 0], "method": a.cutout}},
         "3": {"class_type": "TrueShotMarketplace", "inputs": {"product": ["2", 0], "matte": ["2", 1],
-                                                               "size": 1200, "fill": 0.78}},
+                                                               "size": 1200, "fill": 0.93}},
         "4": {"class_type": "TrueShotPlan", "inputs": {
             "product": ["2", 0], "matte": ["2", 1], "product_name": a.product, "brief": a.brief.replace("|", "\n"),
             "formats": a.formats, "variants": a.variants, "seed": a.seed}},
@@ -96,6 +96,7 @@ def build(a, run):
         "37": {"class_type": "SaveImage", "inputs": {"images": ["36", 0], "filename_prefix": f"{P}/sheet"}},
         "38": {"class_type": "PreviewAny", "inputs": {"source": ["30", 3]}},
         "39": {"class_type": "PreviewAny", "inputs": {"source": ["4", 6]}},
+        "40": {"class_type": "PreviewAny", "inputs": {"source": ["3", 1]}},
     }
     return g
 

@@ -63,14 +63,21 @@ class TrueShotMarketplace:
     def INPUT_TYPES(cls):
         return {"required": {"product": ("IMAGE",), "matte": ("MASK",),
                              "size": ("INT", {"default": 1200, "min": 256, "max": 4096, "step": 8}),
-                             "fill": ("FLOAT", {"default": 0.78, "min": 0.3, "max": 0.95, "step": 0.01})}}
+                             "fill": ("FLOAT", {"default": 0.93, "min": 0.3, "max": 0.98, "step": 0.01})}}
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("listing", "compliance")
     FUNCTION = "run"
     CATEGORY = CAT
 
     def run(self, product, matte, size, fill):
-        return (_t(core.marketplace(_np(product)[..., :3], _m(matte), size, fill)),)
+        img = core.marketplace(_np(product)[..., :3], _m(matte), size, fill)
+        c = core.marketplace_check(img)
+        rep = (f"marketplace main image: {'PASS' if c['pass'] else 'FAIL'} | white bg {c['white_background']} | "
+               f">=1000px {c['resolution']} | product fill {c['fill']:.0%} (>=85%: {c['product_fill']}) | "
+               f"not cropped {c['not_cropped']} | product pixels: 100% real")
+        print("[TrueShot] " + rep)
+        return (_t(img), rep)
 
 
 class TrueShotPlan:
@@ -139,15 +146,21 @@ class TrueShotRestore:
             outs.append(o), reps.append(r), gens.append(g)
         keep = pick_best(p, reps)
         shots = [_t(outs[i]) for i in keep]
-        comps = [_t(core.compare_card(prod, gens[i], outs[i], reps[i]["box"])) if reps[i].get("ok")
-                 else _t(gens[i]) for i in keep]
+        comps = [_t(core.compare_card(prod, gens[i], outs[i], reps[i]["box"],
+                                      scores=(reps[i]["truth_ai"], reps[i]["truth"]) if "truth" in reps[i] else None))
+                 if reps[i].get("ok") else _t(gens[i]) for i in keep]
         best_gen = [_t(gens[i]) for i in keep]
         lines = [stats([reps[i] for i in keep])]
         for i in keep:
             r = reps[i]
-            lines.append(f"shot {r['shot']} ({r['format']}) v{r['variant']}: {r.get('method')} "
-                         f"inliers={r.get('inliers', 0)} fidelity {r.get('fidelity_before', 0):.2f} -> "
-                         f"{r.get('fidelity_after', 0):.2f}")
+            t_ai, t_ts = r.get("truth_ai") or {}, r.get("truth") or {}
+            lines.append(f"shot {r['shot']} ({r['format']}) v{r['variant']}: {r.get('verdict', 'REVIEW')} | "
+                         f"truth AI-only {t_ai.get('total', '-')} -> TrueShot {t_ts.get('total', '-')} "
+                         f"[label {t_ai.get('label', '-')}->{t_ts.get('label', '-')}, "
+                         f"shape {t_ai.get('shape', '-')}->{t_ts.get('shape', '-')}, "
+                         f"colour {t_ai.get('colour', '-')}->{t_ts.get('colour', '-')}] "
+                         f"geometry {t_ts.get('geometry', 'unverified')} ({r.get('method')}, {r.get('inliers', 0)} inliers)"
+                         f"{', ghost removed ' + str(round(100 * r['ghost'])) + '%' if r.get('ghost') else ''}")
         rep = "\n".join(lines)
         print("[TrueShot]\n" + rep)
         return (shots, comps, best_gen, rep)

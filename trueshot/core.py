@@ -47,13 +47,14 @@ def ssim(a, b, mask=None):
 
 # ------------------------------------------------------------------- cutout
 _REMBG = None
+_REMBG_FAILED = False
 
 
 def cutout(img, method="auto"):
     """Product matte. Uses rembg (IS-Net / BiRefNet) when available, else a
     GrabCut matte seeded from colour distance to the border."""
-    global _REMBG
-    if method in ("auto", "rembg"):
+    global _REMBG, _REMBG_FAILED
+    if method == "rembg" or (method == "auto" and not _REMBG_FAILED):
         try:
             if _REMBG is None:
                 from rembg import new_session
@@ -66,6 +67,7 @@ def cutout(img, method="auto"):
         except Exception as e:  # pragma: no cover - optional dependency
             if method == "rembg":
                 raise
+            _REMBG_FAILED = True
             print(f"[TrueShot] rembg unavailable ({type(e).__name__}); using GrabCut")
     return grabcut_matte(img)
 
@@ -156,10 +158,12 @@ def contact_shadow(alpha, strength=0.55, softness=0.035, lift=0.12):
     return np.clip(strength * sh + 0.6 * strength * occ, 0, 0.9) * (1 - alpha)
 
 
-def marketplace(prod, alpha, size=1200, height_frac=0.78, bg=(1.0, 1.0, 1.0)):
+def marketplace(prod, alpha, size=1200, height_frac=0.93, bg=(1.0, 1.0, 1.0)):
     """Deterministic white-background listing photo: no generation, so the
     product is 100% real pixels."""
-    rgb, a, _ = place(prod, alpha, size, size, height_frac=height_frac, base_y=0.89)
+    ph, pw = alpha.shape
+    s = min(height_frac * size / ph, height_frac * size / pw)
+    rgb, a, _ = place(prod, alpha, size, size, height_frac=s * ph / size, base_y=0.5 + s * ph / size / 2)
     canvas = np.ones((size, size, 3), np.float32) * np.array(bg, np.float32)
     sh = contact_shadow(a, strength=0.35)
     canvas = canvas * (1 - sh[..., None])
@@ -297,7 +301,7 @@ def harmonise(prod_rgb, prod_a, scene, amount=0.55):
 
 
 # ---------------------------------------------------------------- restore
-def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0):
+def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0, score=True):
     """Paste the *real* product pixels back onto the generated scene.
 
     Returns restored image, warped alpha, and a report with label-fidelity
@@ -305,28 +309,41 @@ def restore(prod, alpha, gen, prior_M=None, harmonise_amount=0.55, edge_px=2.0):
     Hg, Wg = gen.shape[:2]
     Hm, info = locate(prod, alpha, gen, prior_M)
     if Hm is None:
-        return gen.copy(), np.zeros((Hg, Wg), np.float32), {**info, "ok": False}
+        return gen.copy(), np.zeros((Hg, Wg), np.float32), {**info, "ok": False, "verdict": "REVIEW"}
     warp = lambda x, interp: cv2.warpPerspective(x, Hm, (Wg, Hg), flags=interp,  # noqa: E731
                                                  borderMode=cv2.BORDER_CONSTANT)
     p_rgb = warp(prod, cv2.INTER_CUBIC if abs(Hm[0, 0]) > 1 else cv2.INTER_AREA)
     p_a = warp(alpha, cv2.INTER_LINEAR)
     region = p_a > 0.5
+    real_rgb = p_rgb.copy()
     before = ssim(gen, p_rgb, p_a)
+    verified = info.get("method") == "features"
+    gen_mask = product_mask_near(gen, bbox(p_a)) if score else None
+    truth_ai = truth_score(real_rgb, p_a, gen, gen_mask, verified) if score else None
+    base = gen
+    ghost = 0.0
+    if score and gen_mask is not None:
+        base, ghost = remove_ghost(gen, gen_mask, p_a)
     p_rgb = harmonise(p_rgb, p_a, gen, harmonise_amount)
     # soft edge so the seam disappears into the generated rim
     a = cv2.GaussianBlur((p_a > 0.5).astype(np.float32), (0, 0), edge_px) * (p_a > 0.02)
     a = np.minimum(a, p_a + 0.0)
     a = np.maximum(a, cv2.erode((p_a > 0.5).astype(np.float32), np.ones((5, 5), np.uint8)))
-    out = gen * (1 - a[..., None]) + p_rgb * a[..., None]
-    after = ssim(out, warp(prod, cv2.INTER_CUBIC), p_a)
+    out = base * (1 - a[..., None]) + p_rgb * a[..., None]
+    after = ssim(out, real_rgb, p_a)
     x0, y0, x1, y1 = bbox(p_a)
     info.update(ok=True, fidelity_before=round(before, 3), fidelity_after=round(after, 3),
-                box=[x0, y0, x1, y1], coverage=round(float(region.mean()), 4))
+                box=[x0, y0, x1, y1], coverage=round(float(region.mean()), 4), ghost=round(ghost, 3))
+    if score:
+        out_mask = product_mask_near(np.clip(out, 0, 1), [x0, y0, x1, y1])
+        truth_ts = truth_score(real_rgb, p_a, out, out_mask, verified)
+        info.update(truth_ai=truth_ai, truth=truth_ts,
+                    verdict="PASS" if verified and truth_ts["total"] >= 85 else "REVIEW")
     return np.clip(out, 0, 1).astype(np.float32), p_a.astype(np.float32), info
 
 
 # ------------------------------------------------------------------ visuals
-def compare_card(real_crop, gen, restored, box, label=("AI only", "TrueShot")):
+def compare_card(real_crop, gen, restored, box, label=("AI only", "TrueShot"), scores=None):
     """Side-by-side zoom on the product: generated vs restored."""
     x0, y0, x1, y1 = box
     pad = int(0.08 * max(x1 - x0, y1 - y0))
@@ -342,9 +359,21 @@ def compare_card(real_crop, gen, restored, box, label=("AI only", "TrueShot")):
     card = np.concatenate([a, bar, b], 1)
     head = np.full((56, card.shape[1], 3), 0.07, np.float32)
     u8 = to_u8(head)
-    cv2.putText(u8, label[0], (12, 38), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 110, 110), 2, cv2.LINE_AA)
-    cv2.putText(u8, label[1], (a.shape[1] + 24, 38), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (120, 255, 160), 2, cv2.LINE_AA)
-    return np.concatenate([to_f(u8), card], 0)
+    l0, l1 = label
+    if scores:
+        l0 = f"{label[0]}  truth {scores[0]['total']}"
+        l1 = f"{label[1]}  truth {scores[1]['total']}"
+    cv2.putText(u8, l0, (12, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 110, 110), 2, cv2.LINE_AA)
+    cv2.putText(u8, l1, (a.shape[1] + 24, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (120, 255, 160), 2, cv2.LINE_AA)
+    out = np.concatenate([to_f(u8), card], 0)
+    if scores:
+        foot = np.full((40, card.shape[1], 3), 0.07, np.float32)
+        f8 = to_u8(foot)
+        for k, (sc, x) in enumerate(((scores[0], 12), (scores[1], a.shape[1] + 24))):
+            t = f"label {sc['label']}  shape {sc['shape']}  colour {sc['colour']}"
+            cv2.putText(f8, t, (x, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+        out = np.concatenate([out, to_f(f8)], 0)
+    return out
 
 
 def contact_sheet(images, names=None, cols=3, cell=420):
@@ -369,3 +398,76 @@ def contact_sheet(images, names=None, cols=3, cell=420):
             row.append(np.full_like(tiles[0], 0.08))
         rows.append(np.concatenate(row, 1))
     return np.concatenate(rows, 0)
+
+
+# ------------------------------------------------------- truth score + QC
+def product_mask_near(img, box, margin=0.18):
+    """Silhouette of whatever product the image shows around `box` (used to
+    measure what the generator actually drew)."""
+    H, W = img.shape[:2]
+    x0, y0, x1, y1 = box
+    m = int(margin * max(x1 - x0, y1 - y0))
+    X0, Y0, X1, Y1 = max(0, x0 - m), max(0, y0 - m), min(W, x1 + m), min(H, y1 + m)
+    crop = img[Y0:Y1, X0:X1]
+    a = cutout(crop) if crop.size else np.zeros(crop.shape[:2], np.float32)
+    full = np.zeros((H, W), np.float32)
+    full[Y0:Y1, X0:X1] = a
+    return full
+
+
+def remove_ghost(gen, gen_mask, real_mask, grow=3):
+    """Where the generator drew product that the real product doesn't cover
+    (a wider bottle, a phantom cap), inpaint the scene back in."""
+    real = cv2.dilate((real_mask > 0.5).astype(np.uint8), np.ones((grow * 2 + 1,) * 2, np.uint8))
+    ghost = ((gen_mask > 0.5).astype(np.uint8) & (1 - real)).astype(np.uint8)
+    ghost = cv2.morphologyEx(ghost, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    if ghost.sum() < 10:
+        return gen, 0.0
+    out = cv2.inpaint(to_u8(gen), cv2.dilate(ghost, np.ones((5, 5), np.uint8)), 7, cv2.INPAINT_TELEA)
+    return to_f(out), float(ghost.sum() / max(1, (real_mask > 0.5).sum()))
+
+
+def _chroma_delta(a_img, b_img, mask):
+    m = mask > 0.5
+    if m.sum() < 20:
+        return 99.0
+    la = cv2.cvtColor(a_img.astype(np.float32), cv2.COLOR_RGB2LAB)[m]
+    lb = cv2.cvtColor(b_img.astype(np.float32), cv2.COLOR_RGB2LAB)[m]
+    return float(np.linalg.norm(la.mean(0)[1:] - lb.mean(0)[1:]))
+
+
+def truth_score(real_warped, real_mask, candidate, cand_mask, verified):
+    """Product Truth Score (0-100) of `candidate` against the real product.
+    label  : masked SSIM of the product region (text, logo, fine print)
+    shape  : IoU of what the image shows as product vs the real silhouette
+    colour : 100 - 4 x chroma distance (Lab a*b*), lighting-independent
+    """
+    label = max(0.0, ssim(candidate, real_warped, real_mask)) * 100
+    inter = ((cand_mask > 0.5) & (real_mask > 0.5)).sum()
+    union = ((cand_mask > 0.5) | (real_mask > 0.5)).sum()
+    shape = 100.0 * inter / max(1, union)
+    colour = max(0.0, 100 - 4 * _chroma_delta(candidate, real_warped, real_mask))
+    total = 0.5 * label + 0.3 * shape + 0.2 * colour
+    return {"label": round(label), "shape": round(shape), "colour": round(colour), "total": round(total),
+            "geometry": "verified" if verified else "unverified"}
+
+
+def marketplace_check(img, min_side=1000, fill_min=0.85, white_tol=8 / 255):
+    """Amazon-style main-image checks: pure white background, product fills
+    >= 85% of the frame's longest side, minimum resolution, not cropped."""
+    H, W = img.shape[:2]
+    u = img.reshape(-1, 3)
+    near_white = (np.abs(img - 1.0) <= white_tol).all(-1)
+    border = np.concatenate([near_white[0], near_white[-1], near_white[:, 0], near_white[:, -1]])
+    fg = ~near_white
+    fg = cv2.morphologyEx(fg.astype(np.uint8), cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    x0, y0, x1, y1 = bbox(fg.astype(np.float32))
+    fill = max((x1 - x0) / W, (y1 - y0) / H)
+    touches = x0 <= 1 or y0 <= 1 or x1 >= W - 1 or y1 >= H - 1
+    checks = {
+        "white_background": bool(border.mean() > 0.995),
+        "resolution": bool(max(H, W) >= min_side),
+        "product_fill": bool(fill >= fill_min),
+        "not_cropped": bool(not touches),
+    }
+    return {"pass": all(checks.values()), "fill": round(float(fill), 3), **checks}
