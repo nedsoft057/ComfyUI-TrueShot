@@ -110,6 +110,11 @@ import torch
 if not torch.cuda.is_available():
     raise SystemExit("NO GPU in this session. Notebook panel -> Session options -> Accelerator: GPU T4 x2, then run again.")
 print("GPU:", torch.cuda.get_device_name(0), flush=True)
+if up():  # restart so freshly pulled node code is loaded
+    subprocess.run("pkill -f 'main.py --listen 127.0.0.1 --port 8188'", shell=True)
+    for _ in range(30):
+        if not up(): break
+        time.sleep(1)
 if not up():
     log = open(f"{ROOT}/comfy.log", "w")
     proc = subprocess.Popen([sys.executable, "main.py", "--listen", "127.0.0.1", "--port", "8188", "--disable-auto-launch",

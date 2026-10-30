@@ -141,6 +141,8 @@ def main():
         shutil.copy(a.image, dst)
     print(f"TrueShot run {run}", flush=True)
     r = post(a.server, "/prompt", {"prompt": g, "client_id": run})
+    if r.get("node_errors"):
+        sys.exit("ComfyUI refused part of the graph:\n" + json.dumps(r["node_errors"], indent=1)[:4000])
     h = wait(a.server, r["prompt_id"], os.path.join(a.comfy_dir, "output", "TrueShot", run))
     for out in h.get("outputs", {}).values():
         if "text" in out:
